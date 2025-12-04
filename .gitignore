@@ -1,0 +1,6 @@
+__pycache__/
+.env
+.venv/
+*.pdf
+instance/
+.pytest_cache/
