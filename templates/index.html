@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChatGPT PDF Completer</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+  <header>
+    <div class="container">
+      <h1>ChatGPT PDF Completer</h1>
+      <p class="tagline">Upload a PDF form, share your prompt, and let ChatGPT prepare a filled copy for download.</p>
+    </div>
+  </header>
+
+  <main class="container">
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div class="flash">
+          {% for message in messages %}
+            <p>{{ message }}</p>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <section class="card">
+      <form action="/" method="post" enctype="multipart/form-data" class="upload-form">
+        <label for="pdf_file">PDF form</label>
+        <input type="file" name="pdf_file" id="pdf_file" accept="application/pdf" required>
+
+        <label for="prompt">Prompt for ChatGPT</label>
+        <textarea name="prompt" id="prompt" rows="6" placeholder="Describe what should be filled in each field, e.g. summarize the document and populate address, name, etc." required></textarea>
+
+        <div class="hint">
+          <p><strong>How it works:</strong> Field names from your PDF and the text inside the document are sent to ChatGPT. The response is interpreted as a JSON map of field names to values and written into a new PDF you can download.</p>
+        </div>
+
+        <button type="submit">Generate filled PDF</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>
