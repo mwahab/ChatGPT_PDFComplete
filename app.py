@@ -3,10 +3,9 @@ import json
 import os
 from typing import Dict, List, Optional, Tuple
 
-from flask import Flask, flash, redirect, render_template, request, send_file, url_for
-from werkzeug.utils import secure_filename
+from flask import Flask, jsonify, render_template, request
 from openai import OpenAI
-from PyPDF2 import PdfReader, PdfWriter
+from PyPDF2 import PdfReader
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,33 +16,51 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-key")
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB upload limit
+DEFAULT_QUESTIONS = [
+    (
+        "I have formed the opinion that the person has a disorder of the mind that requires "
+        "treatment and seriously impairs the person ability to react appropriately to their environment "
+        "or associate with others. The reasons for my opinion are as follows:"
+    ),
+    (
+        "I have formed the opinion that the person requires treatment in or through a designated facility. "
+        "The reasons that I have formed this opinion are as follows:"
+    ),
+    (
+        "I have formed the opinion that the person requires care, supervision and control in or through a "
+        "designated facility to prevent their substantial mental or physical deterioration or for the "
+        "protection of the person or for the protection of others. The reasons that I have formed this "
+        "opinion are as follows:"
+    ),
+    (
+        "I have formed the opinion that the person cannot suitably be admitted as a voluntary patient. "
+        "The reasons that I have formed this opinion are as follows:"
+    ),
+]
 
 
-def extract_pdf_text_and_fields(pdf_stream: io.BytesIO) -> Tuple[str, List[str]]:
-    """Return concatenated PDF text content and a list of form field names."""
+def extract_pdf_text(pdf_stream: io.BytesIO) -> str:
+    """Return concatenated PDF text content."""
     reader = PdfReader(pdf_stream)
     text_parts: List[str] = []
     for page in reader.pages:
         text_parts.append(page.extract_text() or "")
-    fields = reader.get_fields() or {}
-    return "\n".join(text_parts), list(fields.keys())
+    return "\n".join(text_parts)
 
 
-def call_chatgpt(prompt: str, field_names: List[str], pdf_text: str) -> Tuple[Dict[str, str], Optional[str]]:
-    """Send a structured prompt to ChatGPT and expect a JSON object for field values.
+def call_chatgpt(prompt: str, questions: List[str], pdf_text: str) -> Tuple[Dict[str, str], Optional[str]]:
+    """Send the user prompt, default questions, and PDF text to ChatGPT and expect JSON answers."""
 
-    Returns a tuple of (field_values, warning_message).
-    """
-    instruction = (
-        "You are filling a PDF form for the user. "
-        "Return ONLY JSON mapping PDF form field names to their values without markdown."
+    questions_block = "\n\n".join(
+        [f"Question {idx + 1}: {text}" for idx, text in enumerate(questions)]
     )
-    field_hint = ", ".join(field_names) if field_names else "field1, field2"
     combined_prompt = (
-        f"{instruction}\n\n"
-        f"PDF field names: {field_hint}\n"
-        f"User prompt: {prompt}\n"
-        f"Optional PDF text for context: {pdf_text[:2000]}"
+        "You are assisting a clinician by answering four assessment prompts. "
+        "Use the provided PDF text and user notes. "
+        "Return ONLY JSON with keys question1 through question4 mapping to concise answers without markdown.\n\n"
+        f"User notes: {prompt}\n\n"
+        f"PDF text: {pdf_text[:2000]}\n\n"
+        f"Questions to answer:\n{questions_block}"
     )
 
     client = OpenAI(api_key=OPENAI_API_KEY)
@@ -57,86 +74,59 @@ def call_chatgpt(prompt: str, field_names: List[str], pdf_text: str) -> Tuple[Di
                 temperature=0,
             )
             content = response.choices[0].message.content
-        except Exception as exc:  # openai raises rich subclasses; catching all keeps UX smooth
+        except Exception as exc:
             fallback_values = {
-                name: f"{prompt[:40]}" if prompt else f"Sample value for {name}"
-                for name in (field_names or ["notes"])
+                f"question{idx + 1}": f"Placeholder answer based on notes: {prompt[:80]}"
+                for idx in range(4)
             }
             return fallback_values, f"OpenAI request failed; used placeholder data ({exc})."
     else:
         fallback_values = {
-            name: f"{prompt[:40]}" if prompt else f"Sample value for {name}"
-            for name in (field_names or ["notes"])
+            f"question{idx + 1}": f"Placeholder answer based on notes: {prompt[:80]}"
+            for idx in range(4)
         }
-        return fallback_values, "No OPENAI_API_KEY detected; returning placeholder values."
+        return fallback_values, "No OPENAI_API_KEY detected; returning placeholder answers."
 
     try:
-        return json.loads(content), None
+        parsed = json.loads(content)
+        answers = {
+            f"question{idx + 1}": parsed.get(f"question{idx + 1}", "")
+            for idx in range(4)
+        }
+        return answers, None
     except json.JSONDecodeError:
-        return {name: content for name in field_names}, "Received non-JSON response; used plain text instead."
+        fallback_values = {f"question{idx + 1}": content for idx in range(4)}
+        return fallback_values, "Received non-JSON response; used plain text instead."
 
 
-def fill_pdf_fields(original_pdf: io.BytesIO, field_values: Dict[str, str]) -> io.BytesIO:
-    """Fill a PDF with the provided field values and return an in-memory stream."""
-    reader = PdfReader(original_pdf)
-    writer = PdfWriter()
-    writer.clone_reader_document_root(reader)
-
-    for page in reader.pages:
-        writer.add_page(page)
-
-    if writer._root_object.get("/AcroForm"):
-        writer._root_object["/AcroForm"].update({"/NeedAppearances": True})
-
-    for page in writer.pages:
-        writer.update_page_form_field_values(page, field_values)
-
-    output_stream = io.BytesIO()
-    writer.write(output_stream)
-    output_stream.seek(0)
-
-    return output_stream
-
-
-@app.route("/", methods=["GET", "POST"])
+@app.route("/")
 def index():
-    if request.method == "POST":
-        uploaded_file = request.files.get("pdf_file")
-        prompt = request.form.get("prompt", "").strip()
+    return render_template("index.html", questions=DEFAULT_QUESTIONS)
 
-        if not uploaded_file or uploaded_file.filename == "":
-            flash("Please upload a PDF file to continue.")
-            return redirect(url_for("index"))
 
-        if not uploaded_file.filename.lower().endswith(".pdf"):
-            flash("The uploaded file must be a PDF.")
-            return redirect(url_for("index"))
+@app.route("/analyze", methods=["POST"])
+def analyze():
+    uploaded_file = request.files.get("pdf_file")
+    prompt = request.form.get("prompt", "").strip()
 
-        pdf_bytes = uploaded_file.read()
-        pdf_stream = io.BytesIO(pdf_bytes)
-        try:
-            pdf_text, field_names = extract_pdf_text_and_fields(pdf_stream)
-        except Exception:
-            flash("Unable to read the PDF file. Please upload a valid PDF form.")
-            return redirect(url_for("index"))
-        pdf_stream.seek(0)
+    if not uploaded_file or uploaded_file.filename == "":
+        return jsonify({"error": "Please upload a PDF file to continue."}), 400
 
-        field_values, warning_message = call_chatgpt(prompt, field_names, pdf_text)
-        filled_pdf_stream = fill_pdf_fields(io.BytesIO(pdf_bytes), field_values)
+    if not uploaded_file.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "The uploaded file must be a PDF."}), 400
 
-        if warning_message:
-            flash(warning_message)
+    pdf_bytes = uploaded_file.read()
+    pdf_stream = io.BytesIO(pdf_bytes)
+    try:
+        pdf_text = extract_pdf_text(pdf_stream)
+    except Exception:
+        return jsonify({"error": "Unable to read the PDF file. Please upload a valid PDF form."}), 400
 
-        safe_name = secure_filename(uploaded_file.filename) or "document.pdf"
-        download_name = safe_name.rsplit(".pdf", 1)[0] + "-filled.pdf"
-        return send_file(
-            filled_pdf_stream,
-            as_attachment=True,
-            download_name=download_name,
-            mimetype="application/pdf",
-        )
-
-    return render_template("index.html")
+    answers, warning_message = call_chatgpt(prompt, DEFAULT_QUESTIONS, pdf_text)
+    response_body = {"answers": answers}
+    if warning_message:
+        response_body["warning"] = warning_message
+    return jsonify(response_body)
 
 
 if __name__ == "__main__":

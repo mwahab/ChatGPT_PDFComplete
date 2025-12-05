@@ -85,6 +85,26 @@ textarea {
   line-height: 1.5;
 }
 
+.questions {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.questions-title {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  font-weight: 700;
+}
+
+.questions ol {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 button {
   background: linear-gradient(90deg, #22d3ee, #60a5fa);
   border: none;
@@ -113,6 +133,49 @@ button:active {
   padding: 0.75rem 1rem;
   border-radius: 12px;
   margin-bottom: 1rem;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 10;
+}
+
+.modal.open {
+  display: flex;
+}
+
+.modal-content {
+  background: #0b1224;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 1.5rem;
+  width: min(720px, 90vw);
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.45);
+}
+
+.modal-content ol {
+  padding-left: 1.2rem;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.warning {
+  background: rgba(251, 191, 36, 0.1);
+  border: 1px solid rgba(251, 191, 36, 0.5);
+  color: #fcd34d;
+  padding: 0.75rem;
+  border-radius: 10px;
+  margin-top: 0.75rem;
+}
+
+.error {
+  color: #fecdd3;
 }
 
 @media (max-width: 640px) {

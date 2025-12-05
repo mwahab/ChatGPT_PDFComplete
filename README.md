@@ -1,6 +1,7 @@
 # ChatGPT PDF Complete
 
-A minimal Flask web app that pairs a user prompt with a PDF form, asks ChatGPT for field values, and returns a filled copy of the PDF for download. The app extracts form field names and PDF text to give the model context, then writes the returned JSON into the form fields.
+A minimal Flask web app that pairs a user prompt with a PDF and asks ChatGPT to answer four clinical assessment questions. The app reads PDF text plus your notes, sends them with the pre-set questions, and displays the answers in a popup for quick review.
+
 
 ## Getting started
 
@@ -16,11 +17,11 @@ A minimal Flask web app that pairs a user prompt with a PDF form, asks ChatGPT f
    ```bash
    python app.py
    ```
-4. Open http://localhost:5000 and upload a PDF form along with your prompt to download a filled copy.
+4. Open http://localhost:5000 and upload a PDF along with your notes to receive the four answers in the popup.
 
 ## Notes
-- If `OPENAI_API_KEY` is not provided, the app still returns a filled PDF using the supplied prompt as placeholder data.
-- The generated PDF is held in memory and streamed back to the browser; nothing is stored permanently on disk.
+- If `OPENAI_API_KEY` is not provided, the app still returns placeholder answers using the supplied notes.
+- PDF content is read in memory for context only; nothing is stored permanently on disk.
 
 ## Troubleshooting
 - **`pip install -r requirements.txt` fails with `ProxyError` or `403 Forbidden`:**
@@ -43,5 +44,5 @@ A minimal Flask web app that pairs a user prompt with a PDF form, asks ChatGPT f
    python app.py
    ```
 3. In your browser, open http://localhost:5000.
-4. Upload a PDF form and enter a natural-language prompt describing how to fill it. Submit the form.
-5. Verify the download starts automatically and that the returned PDF contains filled fields based on your prompt. If you run without an API key, the placeholders will reflect the prompt text so you can still confirm the flow works.
+4. Upload a PDF and enter any notes you want ChatGPT to consider. Submit the form.
+5. Confirm a popup appears showing answers to the four questions. If you run without an API key, the placeholders will still display so you can verify the flow.
