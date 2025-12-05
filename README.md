@@ -17,7 +17,7 @@ A minimal Flask web app that pairs a user prompt with a PDF and asks ChatGPT to 
    ```bash
    python app.py
    ```
-4. Open http://localhost:5000 and upload a PDF along with your notes to receive the four answers in the popup.
+4. Open http://localhost:4000 and upload a PDF along with your notes to receive the four answers in the popup.
 
 ## Notes
 - If `OPENAI_API_KEY` is not provided, the app still returns placeholder answers using the supplied notes.
@@ -43,6 +43,6 @@ A minimal Flask web app that pairs a user prompt with a PDF and asks ChatGPT to 
    ```bash
    python app.py
    ```
-3. In your browser, open http://localhost:5000.
+3. In your browser, open http://localhost:4000.
 4. Upload a PDF and enter any notes you want ChatGPT to consider. Submit the form.
 5. Confirm a popup appears showing answers to the four questions. If you run without an API key, the placeholders will still display so you can verify the flow.

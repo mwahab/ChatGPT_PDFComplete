@@ -12,6 +12,7 @@ load_dotenv()
 
 # Require the caller to provide an API key via environment variables; do not ship a default.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_API_KEY = "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"
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-key")
@@ -131,4 +132,4 @@ def analyze():
 
 if __name__ == "__main__":
     debug_mode = os.getenv("FLASK_DEBUG", "false").lower() == "true"
-    app.run(host="0.0.0.0", port=5000, debug=debug_mode)
+    app.run(host="0.0.0.0", port=4000, debug=debug_mode)
