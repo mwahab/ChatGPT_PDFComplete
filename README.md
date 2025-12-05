@@ -2,6 +2,7 @@
 
 A minimal Flask web app that pairs a user prompt with a PDF and asks ChatGPT to answer four clinical assessment questions. The app reads PDF text plus your notes, sends them with the pre-set questions, and displays the answers in a popup for quick review.
 
+
 ## Getting started
 
 1. Install dependencies:
