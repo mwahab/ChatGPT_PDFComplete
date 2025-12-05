@@ -1,3 +1,4 @@
+import base64
 import io
 import json
 import os
@@ -5,7 +6,8 @@ from typing import Dict, List, Optional, Tuple
 
 from flask import Flask, jsonify, render_template, request
 from openai import OpenAI
-from PyPDF2 import PdfReader
+from PyPDF2 import PdfReader, PdfWriter
+from PyPDF2.generic import BooleanObject, DictionaryObject, NameObject
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -47,6 +49,47 @@ def extract_pdf_text(pdf_stream: io.BytesIO) -> str:
     for page in reader.pages:
         text_parts.append(page.extract_text() or "")
     return "\n".join(text_parts)
+
+
+def fill_pdf_with_answers(pdf_bytes: bytes, answers: Dict[str, str]) -> Tuple[Optional[bytes], Optional[str]]:
+    """Fill the expected form fields in the PDF with the four generated answers."""
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    writer = PdfWriter()
+    writer.clone_document_from_reader(reader)
+
+    field_mapping = {
+        "Has a disorder of the mind": answers.get("question1", ""),
+        "Requires treatment in a facility": answers.get("question2", ""),
+        "Requires care and supervision": answers.get("question3", ""),
+        "Person cannot suitably be admitted": answers.get("question4", ""),
+    }
+
+    available_fields = reader.get_fields() or {}
+    values_to_write = {k: v for k, v in field_mapping.items() if k in available_fields}
+    missing_fields = [k for k in field_mapping if k not in available_fields]
+
+    if not values_to_write:
+        return None, "Could not find the expected form fields to populate in the PDF."
+
+    for page in writer.pages:
+        writer.update_page_form_field_values(page, values_to_write)
+
+    root = writer._root_object
+    acro_form = root.get("/AcroForm")
+    if acro_form is None:
+        acro_form = DictionaryObject()
+        root[NameObject("/AcroForm")] = acro_form
+    acro_form.update({NameObject("/NeedAppearances"): BooleanObject(True)})
+
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    buffer.seek(0)
+
+    warning = None
+    if missing_fields:
+        warning = f"PDF did not include these expected fields: {', '.join(missing_fields)}."
+
+    return buffer.getvalue(), warning
 
 
 def call_chatgpt(prompt: str, questions: List[str], pdf_text: str) -> Tuple[Dict[str, str], Optional[str]]:
@@ -125,8 +168,26 @@ def analyze():
 
     answers, warning_message = call_chatgpt(prompt, DEFAULT_QUESTIONS, pdf_text)
     response_body = {"answers": answers}
+    warnings: List[str] = []
     if warning_message:
-        response_body["warning"] = warning_message
+        warnings.append(warning_message)
+
+    filled_pdf_b64: Optional[str] = None
+    try:
+        filled_pdf_bytes, fill_warning = fill_pdf_with_answers(pdf_bytes, answers)
+        if fill_warning:
+            warnings.append(fill_warning)
+        if filled_pdf_bytes:
+            filled_pdf_b64 = base64.b64encode(filled_pdf_bytes).decode("utf-8")
+        else:
+            warnings.append("We could not generate a filled PDF from this form.")
+    except Exception as exc:
+        warnings.append(f"Unable to populate the PDF form ({exc}).")
+
+    if filled_pdf_b64:
+        response_body["filled_pdf"] = filled_pdf_b64
+    if warnings:
+        response_body["warning"] = " ".join(warnings)
     return jsonify(response_body)
 
 

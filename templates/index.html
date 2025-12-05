@@ -46,7 +46,10 @@
       <h2 id="modal-title">ChatGPT answers</h2>
       <div id="modal-body"></div>
       <p id="modal-warning" class="warning" hidden></p>
-      <button id="close-modal" type="button">Close</button>
+      <div class="modal-actions">
+        <button id="download-pdf" type="button" class="secondary" hidden disabled>Download filled PDF</button>
+        <button id="close-modal" type="button">Close</button>
+      </div>
     </div>
   </div>
 
@@ -56,6 +59,18 @@
     const modalBody = document.getElementById('modal-body');
     const modalWarning = document.getElementById('modal-warning');
     const closeModal = document.getElementById('close-modal');
+    const downloadButton = document.getElementById('download-pdf');
+    let currentDownloadUrl = null;
+
+    const base64ToBlob = (base64, contentType) => {
+      const binary = atob(base64);
+      const len = binary.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i += 1) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return new Blob([bytes], { type: contentType });
+    };
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -63,7 +78,13 @@
 
       modalBody.textContent = 'Working on your request…';
       modalWarning.hidden = true;
+      downloadButton.hidden = true;
+      downloadButton.disabled = true;
       modal.classList.add('open');
+      if (currentDownloadUrl) {
+        URL.revokeObjectURL(currentDownloadUrl);
+        currentDownloadUrl = null;
+      }
 
       try {
         const response = await fetch(form.action, {
@@ -92,6 +113,13 @@
           modalWarning.textContent = payload.warning;
           modalWarning.hidden = false;
         }
+
+        if (payload.filled_pdf) {
+          const blob = base64ToBlob(payload.filled_pdf, 'application/pdf');
+          currentDownloadUrl = URL.createObjectURL(blob);
+          downloadButton.hidden = false;
+          downloadButton.disabled = false;
+        }
       } catch (error) {
         modalBody.innerHTML = `<p class="error">Unable to process the request. ${error}</p>`;
       }
@@ -105,6 +133,16 @@
       if (event.target === modal) {
         modal.classList.remove('open');
       }
+    });
+
+    downloadButton.addEventListener('click', () => {
+      if (!currentDownloadUrl) return;
+      const link = document.createElement('a');
+      link.href = currentDownloadUrl;
+      link.download = 'filled-form.pdf';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
     });
   </script>
 </body>
