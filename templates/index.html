@@ -3,147 +3,210 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ChatGPT PDF Completer</title>
+  <title>Prompt to 3D Model</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
   <header>
     <div class="container">
-      <h1>ChatGPT PDF Completer</h1>
-      <p class="tagline">Upload a PDF, share your notes, and get rapid answers to the four assessment prompts.</p>
+      <p class="eyebrow">Experiment</p>
+      <h1>Generate quick 3D starters from a text prompt</h1>
+      <p class="tagline">Sketch an idea in words and preview a printable STL instantly.</p>
     </div>
   </header>
 
   <main class="container">
-    <section class="card">
-      <form id="analysis-form" action="/analyze" method="post" enctype="multipart/form-data" class="upload-form">
-        <label for="pdf_file">PDF form</label>
-        <input type="file" name="pdf_file" id="pdf_file" accept="application/pdf" required>
+    <section class="card grid">
+      <div>
+        <form id="prompt-form" class="stack">
+          <label for="prompt">What should we build?</label>
+          <textarea id="prompt" name="prompt" rows="6" placeholder="Example: A cylindrical pencil holder about 10cm tall with a wide base" required></textarea>
 
-        <label for="prompt">Notes for ChatGPT</label>
-        <textarea name="prompt" id="prompt" rows="6" placeholder="Share any observations or context you want reflected in the answers." required></textarea>
+          <div class="hint">
+            <p><strong>Try these:</strong></p>
+            <ul>
+              {% for idea in sample_prompts %}
+              <li class="sample" data-idea="{{ idea }}">{{ idea }}</li>
+              {% endfor %}
+            </ul>
+          </div>
 
-        <div class="hint">
-          <p><strong>How it works:</strong> Your notes, the PDF text, and the four assessment questions below are sent to ChatGPT. The answers are returned on this page in a popup so you can quickly review them.</p>
+          <button type="submit">Generate model</button>
+        </form>
+      </div>
+
+      <div class="viewer-panel">
+        <div class="viewer-header">
+          <div>
+            <p class="eyebrow">Preview</p>
+            <h2 id="mesh-name">Waiting for a prompt…</h2>
+            <p class="muted" id="mesh-details">Describe what you want to see the model preview here.</p>
+          </div>
+          <button id="download" type="button" class="secondary" disabled>Download STL</button>
         </div>
-
-        <div class="questions">
-          <p class="questions-title">Assessment questions sent to ChatGPT</p>
-          <ol>
-            {% for question in questions %}
-              <li>{{ question }}</li>
-            {% endfor %}
-          </ol>
-        </div>
-
-        <button type="submit">Generate answers</button>
-      </form>
+        <div class="viewer" id="viewer"></div>
+        <div class="meta" id="mesh-meta"></div>
+      </div>
     </section>
   </main>
 
-  <div id="modal" class="modal" aria-hidden="true" role="dialog" aria-labelledby="modal-title">
-    <div class="modal-content">
-      <h2 id="modal-title">ChatGPT answers</h2>
-      <div id="modal-body"></div>
-      <p id="modal-warning" class="warning" hidden></p>
-      <div class="modal-actions">
-        <button id="download-pdf" type="button" class="secondary" hidden disabled>Download filled PDF</button>
-        <button id="close-modal" type="button">Close</button>
-      </div>
-    </div>
-  </div>
+  <script type="module">
+    import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+    import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js';
+    import { STLLoader } from 'https://unpkg.com/three@0.160.0/examples/jsm/loaders/STLLoader.js';
 
-  <script>
-    const form = document.getElementById('analysis-form');
-    const modal = document.getElementById('modal');
-    const modalBody = document.getElementById('modal-body');
-    const modalWarning = document.getElementById('modal-warning');
-    const closeModal = document.getElementById('close-modal');
-    const downloadButton = document.getElementById('download-pdf');
-    let currentDownloadUrl = null;
+    const viewerEl = document.getElementById('viewer');
+    const meshName = document.getElementById('mesh-name');
+    const meshDetails = document.getElementById('mesh-details');
+    const meshMeta = document.getElementById('mesh-meta');
+    const downloadButton = document.getElementById('download');
+    const form = document.getElementById('prompt-form');
+    const promptField = document.getElementById('prompt');
+    const sampleIdeas = document.querySelectorAll('.sample');
 
-    const base64ToBlob = (base64, contentType) => {
-      const binary = atob(base64);
-      const len = binary.length;
-      const bytes = new Uint8Array(len);
-      for (let i = 0; i < len; i += 1) {
-        bytes[i] = binary.charCodeAt(i);
+    let renderer, scene, camera, controls, stlLoader, currentObject, currentDownloadUrl;
+
+    function setupScene() {
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setSize(viewerEl.clientWidth, viewerEl.clientHeight);
+      viewerEl.appendChild(renderer.domElement);
+
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color('#0b1224');
+
+      camera = new THREE.PerspectiveCamera(35, viewerEl.clientWidth / viewerEl.clientHeight, 0.1, 100);
+      camera.position.set(2.5, 1.6, 2.5);
+
+      const ambient = new THREE.AmbientLight(0xffffff, 0.8);
+      scene.add(ambient);
+
+      const keyLight = new THREE.DirectionalLight(0xffffff, 0.6);
+      keyLight.position.set(5, 5, 5);
+      scene.add(keyLight);
+
+      const rimLight = new THREE.DirectionalLight(0x22d3ee, 0.4);
+      rimLight.position.set(-4, 6, -4);
+      scene.add(rimLight);
+
+      controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+
+      stlLoader = new STLLoader();
+
+      window.addEventListener('resize', onResize);
+      animate();
+    }
+
+    function onResize() {
+      const { clientWidth, clientHeight } = viewerEl;
+      camera.aspect = clientWidth / clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(clientWidth, clientHeight);
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    function clearMesh() {
+      if (currentObject) {
+        scene.remove(currentObject);
+        currentObject.geometry.dispose();
+        currentObject.material.dispose();
+        currentObject = null;
       }
-      return new Blob([bytes], { type: contentType });
-    };
+    }
+
+    function loadStlFromBase64(base64) {
+      const binary = atob(base64);
+      const array = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) {
+        array[i] = binary.charCodeAt(i);
+      }
+      const blob = new Blob([array], { type: 'model/stl' });
+      const url = URL.createObjectURL(blob);
+      if (currentDownloadUrl) URL.revokeObjectURL(currentDownloadUrl);
+      currentDownloadUrl = url;
+      downloadButton.disabled = false;
+
+      stlLoader.load(url, (geometry) => {
+        clearMesh();
+        geometry.computeVertexNormals();
+        const material = new THREE.MeshStandardMaterial({
+          color: 0x8ab4f8,
+          metalness: 0.15,
+          roughness: 0.35,
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        geometry.center();
+        const box = new THREE.Box3().setFromObject(mesh);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const maxDim = Math.max(size.x, size.y, size.z);
+        const scale = 1.5 / maxDim;
+        mesh.scale.setScalar(scale);
+        scene.add(mesh);
+        currentObject = mesh;
+        controls.reset();
+        camera.position.set(2.5, 1.6, 2.5);
+      });
+    }
 
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
-      const formData = new FormData(form);
+      const prompt = promptField.value.trim();
+      if (!prompt) return;
 
-      modalBody.textContent = 'Working on your request…';
-      modalWarning.hidden = true;
-      downloadButton.hidden = true;
+      meshName.textContent = 'Generating…';
+      meshDetails.textContent = 'Building a mesh from your description.';
+      meshMeta.textContent = '';
       downloadButton.disabled = true;
-      modal.classList.add('open');
-      if (currentDownloadUrl) {
-        URL.revokeObjectURL(currentDownloadUrl);
-        currentDownloadUrl = null;
+
+      const response = await fetch('/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        meshName.textContent = 'Unable to generate model';
+        meshDetails.textContent = payload.error || 'Try a different description.';
+        return;
       }
 
-      try {
-        const response = await fetch(form.action, {
-          method: 'POST',
-          body: formData,
-        });
+      meshName.textContent = payload.mesh.name;
+      meshDetails.textContent = payload.mesh.details;
+      meshMeta.innerHTML = `
+        <div><strong>Shape</strong><span>${payload.mesh.shape}</span></div>
+        <div><strong>Faces</strong><span>${payload.mesh.faces}</span></div>
+        <div><strong>Vertices</strong><span>${payload.mesh.vertices}</span></div>
+        <div><strong>Bounds</strong><span>${payload.mesh.bounds.width.toFixed(2)} × ${payload.mesh.bounds.height.toFixed(2)} × ${payload.mesh.bounds.depth.toFixed(2)}</span></div>
+      `;
 
-        const payload = await response.json();
-
-        if (!response.ok) {
-          modalBody.innerHTML = `<p class="error">${payload.error || 'Something went wrong.'}</p>`;
-          return;
-        }
-
-        const answers = payload.answers || {};
-        modalBody.innerHTML = `
-          <ol>
-            <li>${answers.question1 || 'No answer provided.'}</li>
-            <li>${answers.question2 || 'No answer provided.'}</li>
-            <li>${answers.question3 || 'No answer provided.'}</li>
-            <li>${answers.question4 || 'No answer provided.'}</li>
-          </ol>
-        `;
-
-        if (payload.warning) {
-          modalWarning.textContent = payload.warning;
-          modalWarning.hidden = false;
-        }
-
-        if (payload.filled_pdf) {
-          const blob = base64ToBlob(payload.filled_pdf, 'application/pdf');
-          currentDownloadUrl = URL.createObjectURL(blob);
-          downloadButton.hidden = false;
-          downloadButton.disabled = false;
-        }
-      } catch (error) {
-        modalBody.innerHTML = `<p class="error">Unable to process the request. ${error}</p>`;
-      }
-    });
-
-    closeModal.addEventListener('click', () => {
-      modal.classList.remove('open');
-    });
-
-    modal.addEventListener('click', (event) => {
-      if (event.target === modal) {
-        modal.classList.remove('open');
-      }
+      loadStlFromBase64(payload.stl);
     });
 
     downloadButton.addEventListener('click', () => {
       if (!currentDownloadUrl) return;
       const link = document.createElement('a');
       link.href = currentDownloadUrl;
-      link.download = 'filled-form.pdf';
+      link.download = 'prompt-model.stl';
       document.body.appendChild(link);
       link.click();
       link.remove();
     });
+
+    sampleIdeas.forEach((sample) => {
+      sample.addEventListener('click', () => {
+        promptField.value = sample.dataset.idea;
+        promptField.focus();
+      });
+    });
+
+    setupScene();
   </script>
 </body>
 </html>

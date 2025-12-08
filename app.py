@@ -1,194 +1,179 @@
 import base64
 import io
-import json
 import os
-from typing import Dict, List, Optional, Tuple
+import re
+from dataclasses import dataclass
+from typing import Dict, List, Tuple
 
+import trimesh
 from flask import Flask, jsonify, render_template, request
-from openai import OpenAI
-from PyPDF2 import PdfReader, PdfWriter
-from PyPDF2.generic import BooleanObject, DictionaryObject, NameObject
-from dotenv import load_dotenv
-
-load_dotenv()
-
-# Require the caller to provide an API key via environment variables; do not ship a default.
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-OPENAI_API_KEY = "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"
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-key")
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB upload limit
-DEFAULT_QUESTIONS = [
-    (
-        "I have formed the opinion that the person has a disorder of the mind that requires "
-        "treatment and seriously impairs the person ability to react appropriately to their environment "
-        "or associate with others. The reasons for my opinion are as follows:"
-    ),
-    (
-        "I have formed the opinion that the person requires treatment in or through a designated facility. "
-        "The reasons that I have formed this opinion are as follows:"
-    ),
-    (
-        "I have formed the opinion that the person requires care, supervision and control in or through a "
-        "designated facility to prevent their substantial mental or physical deterioration or for the "
-        "protection of the person or for the protection of others. The reasons that I have formed this "
-        "opinion are as follows:"
-    ),
-    (
-        "I have formed the opinion that the person cannot suitably be admitted as a voluntary patient. "
-        "The reasons that I have formed this opinion are as follows:"
-    ),
+
+
+@dataclass
+class MeshDescription:
+    name: str
+    details: str
+    shape: str
+    dimensions: Dict[str, float]
+
+
+SHAPE_KEYWORDS: Dict[str, List[str]] = {
+    "box": ["box", "cube", "rectangle", "rectangular"],
+    "sphere": ["sphere", "ball", "orb"],
+    "cylinder": ["cylinder", "tube", "pipe"],
+    "cone": ["cone", "pyramid"],
+    "torus": ["torus", "donut", "doughnut", "ring"],
+}
+
+
+DEFAULT_DIMENSIONS = {
+    "box": {"width": 1.0, "height": 1.0, "depth": 1.0},
+    "sphere": {"radius": 0.65},
+    "cylinder": {"radius": 0.4, "height": 1.2},
+    "cone": {"radius": 0.6, "height": 1.2},
+    "torus": {"radius": 0.65, "tube_radius": 0.22},
+}
+
+
+SAMPLE_PROMPTS = [
+    "A sturdy cube-shaped planter with slightly taller height than width",
+    "A sleek cylindrical pencil holder with a wide opening",
+    "A hollow torus ring that could serve as a napkin holder",
 ]
 
 
-def extract_pdf_text(pdf_stream: io.BytesIO) -> str:
-    """Return concatenated PDF text content."""
-    reader = PdfReader(pdf_stream)
-    text_parts: List[str] = []
-    for page in reader.pages:
-        text_parts.append(page.extract_text() or "")
-    return "\n".join(text_parts)
+FLOAT_PATTERN = re.compile(r"\d+(?:\.\d+)?")
 
 
-def fill_pdf_with_answers(pdf_bytes: bytes, answers: Dict[str, str]) -> Tuple[Optional[bytes], Optional[str]]:
-    """Fill the expected form fields in the PDF with the four generated answers."""
-    reader = PdfReader(io.BytesIO(pdf_bytes))
-    writer = PdfWriter()
-    writer.clone_document_from_reader(reader)
+def _extract_numbers(prompt: str) -> List[float]:
+    return [float(match) for match in FLOAT_PATTERN.findall(prompt)]
 
-    field_mapping = {
-        "Has a disorder of the mind": answers.get("question1", ""),
-        "Requires treatment in a facility": answers.get("question2", ""),
-        "Requires care and supervision": answers.get("question3", ""),
-        "Person cannot suitably be admitted": answers.get("question4", ""),
-    }
 
-    available_fields = reader.get_fields() or {}
-    values_to_write = {k: v for k, v in field_mapping.items() if k in available_fields}
-    missing_fields = [k for k in field_mapping if k not in available_fields]
+def _choose_shape(prompt: str) -> str:
+    lower_prompt = prompt.lower()
+    for shape, keywords in SHAPE_KEYWORDS.items():
+        if any(keyword in lower_prompt for keyword in keywords):
+            return shape
+    return "box"
 
-    if not values_to_write:
-        return None, "Could not find the expected form fields to populate in the PDF."
 
-    for page in writer.pages:
-        writer.update_page_form_field_values(page, values_to_write)
+def _dimensions_from_numbers(shape: str, numbers: List[float]) -> Dict[str, float]:
+    if not numbers:
+        return DEFAULT_DIMENSIONS[shape]
 
-    root = writer._root_object
-    acro_form = root.get("/AcroForm")
-    if acro_form is None:
-        acro_form = DictionaryObject()
-        root[NameObject("/AcroForm")] = acro_form
-    acro_form.update({NameObject("/NeedAppearances"): BooleanObject(True)})
+    if shape == "box":
+        values = (numbers + numbers[:3])[:3]
+        width, height, depth = values
+        return {"width": width, "height": height, "depth": depth}
 
+    if shape == "sphere":
+        return {"radius": max(numbers[0], 0.1)}
+
+    if shape == "cylinder":
+        values = (numbers + numbers[:2])[:2]
+        radius, height = values
+        return {"radius": max(radius, 0.1), "height": height}
+
+    if shape == "cone":
+        values = (numbers + numbers[:2])[:2]
+        radius, height = values
+        return {"radius": max(radius, 0.1), "height": height}
+
+    if shape == "torus":
+        values = (numbers + numbers[:2])[:2]
+        radius, tube = values
+        return {"radius": max(radius, 0.1), "tube_radius": max(tube * 0.25, 0.05)}
+
+    return DEFAULT_DIMENSIONS[shape]
+
+
+def _build_mesh(shape: str, dimensions: Dict[str, float]) -> trimesh.Trimesh:
+    if shape == "box":
+        return trimesh.creation.box(
+            extents=(dimensions["width"], dimensions["height"], dimensions["depth"])
+        )
+    if shape == "sphere":
+        return trimesh.creation.icosphere(radius=dimensions["radius"], subdivisions=3)
+    if shape == "cylinder":
+        return trimesh.creation.cylinder(
+            radius=dimensions["radius"], height=dimensions["height"], sections=48
+        )
+    if shape == "cone":
+        return trimesh.creation.cone(
+            radius=dimensions["radius"], height=dimensions["height"], sections=64
+        )
+    if shape == "torus":
+        return trimesh.creation.torus(
+            radius=dimensions["radius"], tube_radius=dimensions["tube_radius"],
+        )
+    return trimesh.creation.box(extents=(1.0, 1.0, 1.0))
+
+
+def generate_mesh_from_prompt(prompt: str) -> Tuple[trimesh.Trimesh, MeshDescription]:
+    prompt = prompt.strip()
+    if not prompt:
+        raise ValueError("A description is required to generate a model.")
+
+    shape = _choose_shape(prompt)
+    numbers = _extract_numbers(prompt)
+    dimensions = _dimensions_from_numbers(shape, numbers)
+    mesh = _build_mesh(shape, dimensions)
+
+    description = MeshDescription(
+        name=f"{shape.capitalize()} concept",
+        details=(
+            "The mesh is procedurally generated based on keywords in your prompt. "
+            "You can download the STL to tweak it further in your favorite CAD tool."
+        ),
+        shape=shape,
+        dimensions=dimensions,
+    )
+    return mesh, description
+
+
+def export_mesh_to_stl(mesh: trimesh.Trimesh) -> str:
     buffer = io.BytesIO()
-    writer.write(buffer)
+    mesh.export(buffer, file_type="stl")
     buffer.seek(0)
-
-    warning = None
-    if missing_fields:
-        warning = f"PDF did not include these expected fields: {', '.join(missing_fields)}."
-
-    return buffer.getvalue(), warning
-
-
-def call_chatgpt(prompt: str, questions: List[str], pdf_text: str) -> Tuple[Dict[str, str], Optional[str]]:
-    """Send the user prompt, default questions, and PDF text to ChatGPT and expect JSON answers."""
-
-    questions_block = "\n\n".join(
-        [f"Question {idx + 1}: {text}" for idx, text in enumerate(questions)]
-    )
-    combined_prompt = (
-        "You are assisting a clinician by answering four assessment prompts. "
-        "Use the provided PDF text and user notes. "
-        "Return ONLY JSON with keys question1 through question4 mapping to concise answers without markdown.\n\n"
-        f"User notes: {prompt}\n\n"
-        f"PDF text: {pdf_text[:2000]}\n\n"
-        f"Questions to answer:\n{questions_block}"
-    )
-
-    client = OpenAI(api_key=OPENAI_API_KEY)
-    api_key_present = bool(OPENAI_API_KEY)
-
-    if api_key_present:
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": combined_prompt}],
-                temperature=0,
-            )
-            content = response.choices[0].message.content
-        except Exception as exc:
-            fallback_values = {
-                f"question{idx + 1}": f"Placeholder answer based on notes: {prompt[:80]}"
-                for idx in range(4)
-            }
-            return fallback_values, f"OpenAI request failed; used placeholder data ({exc})."
-    else:
-        fallback_values = {
-            f"question{idx + 1}": f"Placeholder answer based on notes: {prompt[:80]}"
-            for idx in range(4)
-        }
-        return fallback_values, "No OPENAI_API_KEY detected; returning placeholder answers."
-
-    try:
-        parsed = json.loads(content)
-        answers = {
-            f"question{idx + 1}": parsed.get(f"question{idx + 1}", "")
-            for idx in range(4)
-        }
-        return answers, None
-    except json.JSONDecodeError:
-        fallback_values = {f"question{idx + 1}": content for idx in range(4)}
-        return fallback_values, "Received non-JSON response; used plain text instead."
+    return base64.b64encode(buffer.read()).decode("utf-8")
 
 
 @app.route("/")
 def index():
-    return render_template("index.html", questions=DEFAULT_QUESTIONS)
+    return render_template("index.html", sample_prompts=SAMPLE_PROMPTS)
 
 
-@app.route("/analyze", methods=["POST"])
-def analyze():
-    uploaded_file = request.files.get("pdf_file")
-    prompt = request.form.get("prompt", "").strip()
+@app.route("/generate", methods=["POST"])
+def generate():
+    payload = request.get_json(silent=True) or {}
+    prompt = payload.get("prompt") or request.form.get("prompt") or ""
 
-    if not uploaded_file or uploaded_file.filename == "":
-        return jsonify({"error": "Please upload a PDF file to continue."}), 400
-
-    if not uploaded_file.filename.lower().endswith(".pdf"):
-        return jsonify({"error": "The uploaded file must be a PDF."}), 400
-
-    pdf_bytes = uploaded_file.read()
-    pdf_stream = io.BytesIO(pdf_bytes)
     try:
-        pdf_text = extract_pdf_text(pdf_stream)
-    except Exception:
-        return jsonify({"error": "Unable to read the PDF file. Please upload a valid PDF form."}), 400
+        mesh, description = generate_mesh_from_prompt(prompt)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
-    answers, warning_message = call_chatgpt(prompt, DEFAULT_QUESTIONS, pdf_text)
-    response_body = {"answers": answers}
-    warnings: List[str] = []
-    if warning_message:
-        warnings.append(warning_message)
+    stl_data = export_mesh_to_stl(mesh)
+    bbox = mesh.bounding_box.extents.tolist()
 
-    filled_pdf_b64: Optional[str] = None
-    try:
-        filled_pdf_bytes, fill_warning = fill_pdf_with_answers(pdf_bytes, answers)
-        if fill_warning:
-            warnings.append(fill_warning)
-        if filled_pdf_bytes:
-            filled_pdf_b64 = base64.b64encode(filled_pdf_bytes).decode("utf-8")
-        else:
-            warnings.append("We could not generate a filled PDF from this form.")
-    except Exception as exc:
-        warnings.append(f"Unable to populate the PDF form ({exc}).")
-
-    if filled_pdf_b64:
-        response_body["filled_pdf"] = filled_pdf_b64
-    if warnings:
-        response_body["warning"] = " ".join(warnings)
-    return jsonify(response_body)
+    return jsonify(
+        {
+            "stl": stl_data,
+            "mesh": {
+                "name": description.name,
+                "details": description.details,
+                "shape": description.shape,
+                "dimensions": description.dimensions,
+                "bounds": {"width": bbox[0], "height": bbox[1], "depth": bbox[2]},
+                "faces": int(mesh.faces.shape[0]),
+                "vertices": int(mesh.vertices.shape[0]),
+            },
+        }
+    )
 
 
 if __name__ == "__main__":
