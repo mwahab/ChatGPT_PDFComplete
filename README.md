@@ -1,48 +1,28 @@
-# ChatGPT PDF Complete
+# Prompt to 3D Model
 
-A minimal Flask web app that pairs a user prompt with a PDF and asks ChatGPT to answer four clinical assessment questions. The app reads PDF text plus your notes, sends them with the pre-set questions, and displays the answers in a popup for quick review.
+This Flask app turns a short text description into a printable 3D starter mesh. The mesh is generated procedurally with [trimesh](https://trimsh.org/), previewed in a Three.js viewer, and can be downloaded as an STL for further editing.
 
+## Running locally
 
-## Getting started
-
-1. Install dependencies:
+1. Create a virtual environment and install dependencies:
    ```bash
+   python -m venv .venv
+   source .venv/bin/activate
    pip install -r requirements.txt
    ```
-2. Set your OpenAI API key (optional – without it the app uses local placeholders):
-   ```bash
-   export OPENAI_API_KEY=your_api_key_here
-   ```
-3. Run the server:
+2. Start the development server:
    ```bash
    python app.py
    ```
-4. Open http://localhost:4000 and upload a PDF along with your notes to receive the four answers in the popup.
+3. Open http://localhost:4000 in your browser.
+
+## How model generation works
+
+* The prompt is scanned for shape keywords (box, sphere, cylinder, cone, torus) and any numbers that look like dimensions.
+* If no dimensions are provided, sensible defaults are used. Numbers are mapped to relevant parameters such as width/height/depth for boxes or radius/height for cylinders.
+* The mesh is built with trimesh and exported to STL directly in memory, then streamed to the browser for preview and download.
 
 ## Notes
-- If `OPENAI_API_KEY` is not provided, the app still returns placeholder answers using the supplied notes.
-- PDF content is read in memory for context only; nothing is stored permanently on disk.
 
-## Troubleshooting
-- **`pip install -r requirements.txt` fails with `ProxyError` or `403 Forbidden`:**
-  - Verify your proxy variables are set (for example `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`) and match your network's requirements.
-  - If your organization mirrors PyPI, point pip directly at it:
-    ```bash
-    pip install --index-url https://your.mirror/simple --trusted-host your.mirror -r requirements.txt
-    ```
- - When outbound HTTPS is blocked entirely, download the wheels from a reachable network and install locally:
-    ```bash
-    pip install --no-index --find-links /path/to/offline-wheels -r requirements.txt
-    ```
-
-- **Uploads are limited to 16 MB:** Larger PDFs are rejected to protect the server. Reduce file size before retrying.
-
-## How to test the site locally
-1. Install dependencies and export your `OPENAI_API_KEY` as described above.
-2. Start the app locally:
-   ```bash
-   python app.py
-   ```
-3. In your browser, open http://localhost:4000.
-4. Upload a PDF and enter any notes you want ChatGPT to consider. Submit the form.
-5. Confirm a popup appears showing answers to the four questions. If you run without an API key, the placeholders will still display so you can verify the flow.
+* File uploads are not required. Only text prompts are accepted.
+* Everything runs locally without external API calls.
